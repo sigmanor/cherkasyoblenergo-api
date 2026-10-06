@@ -59,7 +59,7 @@ Feel free to use it for your projects. However, please note that this instance i
    |----------|----------|---------|-------------|
    | `DB_NAME` | No | `cherkasyoblenergo.db` | SQLite database file path |
    | `SERVER_PORT` | No | `8080` | Port for the API server |
-   | `NEWS_URL` | No | `https://gita.cherkasyoblenergo.com/obl-main-controller/api/news2?size=18&category=1&page=0` | URL to parse schedules from |
+   | `NEWS_URL` | No | `https://www.cherkasyoblenergo.com/api/v1/posts/category/news?lang=uk&page=0&size=20` | URL to parse schedules from |
    | `PARSING_INTERVAL_MINUTES` | No | `5` | How often to check for new schedules (minutes) |
    | `RATE_LIMIT_PER_MINUTE` | No | `60` | Max requests per minute per IP |
    | `LOG_LEVEL` | No | `info` | Logging level (`debug`, `info`, `warn`, `error`) |
