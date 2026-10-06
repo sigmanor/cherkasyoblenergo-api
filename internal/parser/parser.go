@@ -154,18 +154,36 @@ func createSecureHTTPClient() *http.Client {
 }
 
 var scheduleKeywords = []string{
-	"оновлені графіки",
-	"графіки погодинних",
-	"графіки відключень",
+	"погодин",
+	"відключ",
+	"вимкн",
+	"оновл",
 }
 
-type NewsResponse struct {
-	NewsList []struct {
-		ID       int    `json:"id"`
-		Date     string `json:"date"`
-		Title    string `json:"title"`
-		HtmlBody string `json:"htmlBody"`
-	} `json:"newsList"`
+const postPublishedAtLayout = "2006-01-02T15:04:05"
+
+type postSummary struct {
+	ID          int    `json:"id"`
+	Title       string `json:"title"`
+	Slug        string `json:"slug"`
+	PublishedAt string `json:"publishedAt"`
+}
+
+type postsListResponse struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Content []postSummary `json:"content"`
+	} `json:"data"`
+}
+
+type postDetailResponse struct {
+	Success bool `json:"success"`
+	Data    struct {
+		ID          int    `json:"id"`
+		Title       string `json:"title"`
+		Content     string `json:"content"`
+		PublishedAt string `json:"publishedAt"`
+	} `json:"data"`
 }
 
 type scheduleNews struct {
@@ -226,51 +244,10 @@ func FetchAndStoreNews(ctx context.Context, db *gorm.DB, newsURL string) {
 
 	log.Println("Starting news parsing")
 
-	req, err := http.NewRequestWithContext(ctx, "GET", newsURL, nil)
+	filteredNews, err := fetchScheduleNews(ctx, createSecureHTTPClient(), newsURL)
 	if err != nil {
-		log.Printf("Failed to create request: %v", err)
+		log.Printf("Failed to fetch news: %v", err)
 		return
-	}
-
-	client := createSecureHTTPClient()
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("Failed to fetch data: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("Failed to read response body: %v", err)
-		return
-	}
-
-	var newsResp NewsResponse
-	if err = json.Unmarshal(body, &newsResp); err != nil {
-		log.Printf("Failed to unmarshal JSON: %v", err)
-		return
-	}
-	log.Printf("Fetched %d news items", len(newsResp.NewsList))
-
-	var filteredNews []scheduleNews
-	for _, news := range newsResp.NewsList {
-		hasScheduleKeywords := containsScheduleKeywords(news.Title)
-		hasSchedulePatterns := containsSchedulePatterns(news.HtmlBody)
-
-		if !hasScheduleKeywords && !hasSchedulePatterns {
-			continue
-		}
-		parsedDate, err := time.ParseInLocation("02.01.2006 15:04", news.Date, kievLocation)
-		if err != nil {
-			continue
-		}
-		filteredNews = append(filteredNews, scheduleNews{
-			ID:       news.ID,
-			Date:     parsedDate,
-			Title:    news.Title,
-			HtmlBody: news.HtmlBody,
-		})
 	}
 
 	sort.Slice(filteredNews, func(i, j int) bool {
@@ -399,19 +376,123 @@ func syncScheduleRecord(db *gorm.DB, news scheduleNews) (syncResult, error) {
 	return syncResultUpdated, nil
 }
 
+func fetchJSON(ctx context.Context, client *http.Client, rawURL string, out interface{}) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to fetch data: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("failed to unmarshal JSON: %w", err)
+	}
+	return nil
+}
+
+// buildPostDetailURL turns a posts list URL like
+// https://host/api/v1/posts/category/news?lang=uk into https://host/api/v1/posts/{slug}?lang=uk.
+func buildPostDetailURL(listURL, slug string) (string, error) {
+	parsedURL, err := url.Parse(listURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid list URL: %w", err)
+	}
+
+	idx := strings.Index(parsedURL.Path, "/posts/")
+	if idx == -1 {
+		return "", errors.New("list URL path must contain /posts/")
+	}
+
+	lang := parsedURL.Query().Get("lang")
+	if lang == "" {
+		lang = "uk"
+	}
+
+	detailURL := url.URL{
+		Scheme:   parsedURL.Scheme,
+		Host:     parsedURL.Host,
+		Path:     parsedURL.Path[:idx+len("/posts/")] + slug,
+		RawQuery: url.Values{"lang": {lang}}.Encode(),
+	}
+	return detailURL.String(), nil
+}
+
+func fetchScheduleNews(ctx context.Context, client *http.Client, listURL string) ([]scheduleNews, error) {
+	var listResp postsListResponse
+	if err := fetchJSON(ctx, client, listURL, &listResp); err != nil {
+		return nil, fmt.Errorf("failed to fetch news list: %w", err)
+	}
+	if !listResp.Success {
+		return nil, errors.New("news list response is not successful")
+	}
+	log.Printf("Fetched %d news items", len(listResp.Data.Content))
+
+	var filteredNews []scheduleNews
+	for _, post := range listResp.Data.Content {
+		if !containsScheduleKeywords(post.Title) || post.Slug == "" {
+			continue
+		}
+
+		detailURL, err := buildPostDetailURL(listURL, post.Slug)
+		if err != nil {
+			return nil, err
+		}
+
+		var detailResp postDetailResponse
+		if err := fetchJSON(ctx, client, detailURL, &detailResp); err != nil {
+			log.Printf("Failed to fetch news ID %d details: %v", post.ID, err)
+			continue
+		}
+		if !detailResp.Success {
+			log.Printf("News ID %d details response is not successful", post.ID)
+			continue
+		}
+
+		parsedDate, err := time.ParseInLocation(postPublishedAtLayout, post.PublishedAt, kievLocation)
+		if err != nil {
+			log.Printf("Failed to parse publishedAt %q for news ID %d: %v", post.PublishedAt, post.ID, err)
+			continue
+		}
+
+		filteredNews = append(filteredNews, scheduleNews{
+			ID:       post.ID,
+			Date:     parsedDate,
+			Title:    post.Title,
+			HtmlBody: detailResp.Data.Content,
+		})
+	}
+
+	return filteredNews, nil
+}
+
 func containsScheduleKeywords(title string) bool {
 	titleLower := strings.ToLower(title)
+	if strings.Contains(titleLower, "гпв") {
+		return true
+	}
+	if !strings.Contains(titleLower, "графік") {
+		return false
+	}
 	for _, kw := range scheduleKeywords {
 		if strings.Contains(titleLower, kw) {
 			return true
 		}
 	}
 	return false
-}
-
-func containsSchedulePatterns(htmlBody string) bool {
-	re := regexp.MustCompile(`\b[1-6]\.[1-2]:?\s+\d{1,2}:\d{2}`)
-	return re.MatchString(htmlBody)
 }
 
 func normalizeSpaces(text string) string {

@@ -59,7 +59,7 @@ https://hue.pp.ua/cherkasyoblenergo/api/
    |--------|-------------|------------------|------|
    | `DB_NAME` | Ні | `cherkasyoblenergo.db` | Шлях до файлу бази даних SQLite |
    | `SERVER_PORT` | Ні | `8080` | Порт для API сервера |
-   | `NEWS_URL` | Ні | `https://gita.cherkasyoblenergo.com/obl-main-controller/api/news2?size=18&category=1&page=0` | URL для парсингу графіків |
+   | `NEWS_URL` | Ні | `https://www.cherkasyoblenergo.com/api/v1/posts/category/news?lang=uk&page=0&size=20` | URL для парсингу графіків |
    | `PARSING_INTERVAL_MINUTES` | Ні | `5` | Як часто перевіряти нові графіки (хвилини) |
    | `RATE_LIMIT_PER_MINUTE` | Ні | `60` | Макс. запитів на хвилину на IP |
    | `LOG_LEVEL` | Ні | `info` | Рівень логування (`debug`, `info`, `warn`, `error`) |

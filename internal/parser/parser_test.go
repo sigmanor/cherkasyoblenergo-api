@@ -82,12 +82,26 @@ func TestParseScheduleFromParagraphs_HandlesColonFormat(t *testing.T) {
 	assert.Equal(t, "00:00 – 03:30, 06:00 – 09:30, 11:30 – 15:30, 17:30 – 21:30, 23:30 – 00:00", result.Col6_2)
 }
 
-func TestContainsSchedulePatterns_HandlesColonFormat(t *testing.T) {
-	// Old format without colon
-	assert.True(t, containsSchedulePatterns("1.1 00:30 - 04:00"), "should match old format without colon")
-	// New format with colon
-	assert.True(t, containsSchedulePatterns("1.1: 00:30 – 04:00"), "should match new format with colon")
-	assert.True(t, containsSchedulePatterns("<p>2.2: 06:00 – 08:00</p>"), "should match new format in HTML")
+func TestContainsScheduleKeywords(t *testing.T) {
+	tests := []struct {
+		name  string
+		title string
+		want  bool
+	}{
+		{"singular with GPV", "Графік погодинних відключень (ГПВ) на 6 жовтня", true},
+		{"updated singular", "Оновлено графік погодинних відключень (ГПВ) на 6 жовтня", true},
+		{"vymknen wording", "Оновлений графік погодинних вимкнень на 9 квітня", true},
+		{"plural legacy", "Графіки погодинних відключень на 19 липня", true},
+		{"updated plural", "Оновлені графіки на 14 липня", true},
+		{"holiday", "З Днем захисників і захисниць України!", false},
+		{"unrelated outage news", "Планові та аварійні відключення: у чат-ботах запрацювали сповіщення", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, containsScheduleKeywords(tt.title))
+		})
+	}
 }
 
 func TestSyncScheduleRecord_CreatesNewRecord(t *testing.T) {

@@ -114,3 +114,38 @@ func TestLoadConfig_MissingFile(t *testing.T) {
 		t.Errorf("expected error when .env file is missing, got nil")
 	}
 }
+
+func TestLoadConfig_ReplacesLegacyNewsURL(t *testing.T) {
+	viper.Reset()
+
+	oldNewsURL := os.Getenv("NEWS_URL")
+	os.Unsetenv("NEWS_URL")
+	defer func() {
+		if oldNewsURL != "" {
+			os.Setenv("NEWS_URL", oldNewsURL)
+		}
+		viper.Reset()
+	}()
+
+	tempDir, err := os.MkdirTemp("", "configtest")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	envContent := []byte(`NEWS_URL=https://gita.cherkasyoblenergo.com/obl-main-controller/api/news2?size=18&category=1&page=0
+`)
+	envFile := filepath.Join(tempDir, ".env")
+	if err := os.WriteFile(envFile, envContent, 0o644); err != nil {
+		t.Fatalf("failed to write .env file: %v", err)
+	}
+
+	cfg, err := LoadConfig(tempDir)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if cfg.NewsURL != DefaultNewsURL {
+		t.Errorf("expected legacy NEWS_URL to be replaced with %q, got %q", DefaultNewsURL, cfg.NewsURL)
+	}
+}

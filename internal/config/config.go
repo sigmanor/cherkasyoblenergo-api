@@ -1,10 +1,18 @@
 package config
 
 import (
+	"log"
+	"strings"
+
 	"github.com/spf13/viper"
 )
 
 var AppVersion = "dev"
+
+const (
+	DefaultNewsURL = "https://www.cherkasyoblenergo.com/api/v1/posts/category/news?lang=uk&page=0&size=20"
+	legacyNewsPath = "obl-main-controller/api/news2"
+)
 
 type Config struct {
 	DBName     string `mapstructure:"DB_NAME"`
@@ -27,7 +35,7 @@ func LoadConfig(path string) (config Config, err error) {
 	viper.SetDefault("RATE_LIMIT_PER_MINUTE", 60)
 	viper.SetDefault("LOG_LEVEL", "info")
 	viper.SetDefault("SERVER_PORT", "8080")
-	viper.SetDefault("NEWS_URL", "https://gita.cherkasyoblenergo.com/obl-main-controller/api/news2?size=20&category=1&page=0")
+	viper.SetDefault("NEWS_URL", DefaultNewsURL)
 	viper.SetDefault("PROXY_MODE", "none")
 
 	viper.AutomaticEnv()
@@ -38,5 +46,13 @@ func LoadConfig(path string) (config Config, err error) {
 	}
 
 	err = viper.Unmarshal(&config)
+	if err != nil {
+		return
+	}
+
+	if strings.Contains(config.NewsURL, legacyNewsPath) {
+		log.Printf("NEWS_URL points to the retired legacy API (%s), using %s instead", config.NewsURL, DefaultNewsURL)
+		config.NewsURL = DefaultNewsURL
+	}
 	return
 }
