@@ -162,6 +162,14 @@ var scheduleKeywords = []string{
 
 const postPublishedAtLayout = "2006-01-02T15:04:05"
 
+// bodyCheckWindow limits how far back posts without schedule keywords in the title
+// get their body fetched and checked for schedule patterns.
+const bodyCheckWindow = 48 * time.Hour
+
+var schedulePatternRe = regexp.MustCompile(`\b[1-6]\.[1-2]\.?:?\s*\d{1,2}:\d{2}`)
+
+var nowFunc = time.Now
+
 type postSummary struct {
 	ID          int    `json:"id"`
 	Title       string `json:"title"`
@@ -179,10 +187,7 @@ type postsListResponse struct {
 type postDetailResponse struct {
 	Success bool `json:"success"`
 	Data    struct {
-		ID          int    `json:"id"`
-		Title       string `json:"title"`
-		Content     string `json:"content"`
-		PublishedAt string `json:"publishedAt"`
+		Content string `json:"content"`
 	} `json:"data"`
 }
 
@@ -443,7 +448,18 @@ func fetchScheduleNews(ctx context.Context, client *http.Client, listURL string)
 
 	var filteredNews []scheduleNews
 	for _, post := range listResp.Data.Content {
-		if !containsScheduleKeywords(post.Title) || post.Slug == "" {
+		if post.Slug == "" {
+			continue
+		}
+
+		parsedDate, err := parsePublishedAt(post.PublishedAt)
+		if err != nil {
+			log.Printf("Failed to parse publishedAt %q for news ID %d: %v", post.PublishedAt, post.ID, err)
+			continue
+		}
+
+		hasScheduleKeywords := containsScheduleKeywords(post.Title)
+		if !hasScheduleKeywords && nowFunc().Sub(parsedDate) > bodyCheckWindow {
 			continue
 		}
 
@@ -462,9 +478,7 @@ func fetchScheduleNews(ctx context.Context, client *http.Client, listURL string)
 			continue
 		}
 
-		parsedDate, err := time.ParseInLocation(postPublishedAtLayout, post.PublishedAt, kievLocation)
-		if err != nil {
-			log.Printf("Failed to parse publishedAt %q for news ID %d: %v", post.PublishedAt, post.ID, err)
+		if !hasScheduleKeywords && !containsSchedulePatterns(detailResp.Data.Content) {
 			continue
 		}
 
@@ -477,6 +491,27 @@ func fetchScheduleNews(ctx context.Context, client *http.Client, listURL string)
 	}
 
 	return filteredNews, nil
+}
+
+// parsePublishedAt accepts the zoneless local time the API returns today
+// (optionally with fractional seconds) and RFC 3339 timestamps with an offset.
+func parsePublishedAt(value string) (time.Time, error) {
+	if t, err := time.ParseInLocation(postPublishedAtLayout, value, kievLocation); err == nil {
+		return t, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("unsupported publishedAt format: %w", err)
+	}
+	return t.In(kievLocation), nil
+}
+
+func containsSchedulePatterns(htmlBody string) bool {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlBody))
+	if err != nil {
+		return schedulePatternRe.MatchString(htmlBody)
+	}
+	return schedulePatternRe.MatchString(normalizeSpaces(doc.Text()))
 }
 
 func containsScheduleKeywords(title string) bool {
