@@ -1,3 +1,11 @@
+## [2.8.1](https://github.com/Sigmanor/cherkasyoblenergo-api/compare/v2.8.0...v2.8.1) (2026-10-06)
+
+
+### Bug Fixes
+
+* **parser:** check recent post bodies and accept more publishedAt formats ([5197c1b](https://github.com/Sigmanor/cherkasyoblenergo-api/commit/5197c1b04be3624eb1787e151e4c2c7eb531a072))
+* **parser:** switch to new cherkasyoblenergo.com posts API ([507796a](https://github.com/Sigmanor/cherkasyoblenergo-api/commit/507796aa978dc18464202fd89e11ddf53156e649))
+
 # [2.8.0](https://github.com/Sigmanor/cherkasyoblenergo-api/compare/v2.7.1...v2.8.0) (2026-04-09)
 
 
