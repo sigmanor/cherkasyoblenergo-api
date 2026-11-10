@@ -166,8 +166,6 @@ const postPublishedAtLayout = "2006-01-02T15:04:05"
 // get their body fetched and checked for schedule patterns.
 const bodyCheckWindow = 48 * time.Hour
 
-var schedulePatternRe = regexp.MustCompile(`\b[1-6]\.[1-2]\.?:?\s*\d{1,2}:\d{2}`)
-
 var nowFunc = time.Now
 
 type postSummary struct {
@@ -479,7 +477,7 @@ func fetchScheduleNews(ctx context.Context, client *http.Client, listURL string)
 			continue
 		}
 
-		if !hasScheduleTitle && !containsSchedulePatterns(detailResp.Data.Content) {
+		if !hasScheduleTitle && !hasScheduleData(parseScheduleData(detailResp.Data.Content)) {
 			continue
 		}
 
@@ -505,14 +503,6 @@ func parsePublishedAt(value string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("unsupported publishedAt format: %w", err)
 	}
 	return t.In(kievLocation), nil
-}
-
-func containsSchedulePatterns(htmlBody string) bool {
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlBody))
-	if err != nil {
-		return schedulePatternRe.MatchString(htmlBody)
-	}
-	return schedulePatternRe.MatchString(normalizeSpaces(doc.Text()))
 }
 
 func containsScheduleKeywords(title string) bool {
@@ -653,7 +643,7 @@ func parseScheduleData(htmlBody string) models.Schedule {
 				return
 			}
 			queueStr := strings.TrimSpace(tr.Find("td").First().Text())
-			timeStr := strings.TrimSpace(tr.Find("td").Last().Text())
+			timeStr := normalizeTimeRanges(tr.Find("td").Last().Text())
 			parts := strings.Split(queueStr, ".")
 			if len(parts) != 2 {
 				return

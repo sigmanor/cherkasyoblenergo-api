@@ -90,6 +90,31 @@ func TestParseScheduleFromParagraphs_IgnoresStatisticsArticle(t *testing.T) {
 	assert.False(t, hasScheduleData(result))
 }
 
+func TestParseScheduleData_HandlesTableWithNbsp(t *testing.T) {
+	html := `<table>
+<tr><th>Черга</th><th>Час</th></tr>
+<tr><td>1.І</td><td>07:00&nbsp;–&nbsp;09:00</td></tr>
+<tr><td>2.ІІ</td><td>22:00 - 24:00</td></tr>
+</table>`
+
+	result := parseScheduleData(html)
+
+	assert.Equal(t, "07:00 – 09:00", result.Col1_1)
+	assert.Equal(t, "22:00 - 24:00", result.Col2_2)
+	assert.True(t, hasScheduleData(result))
+}
+
+func TestParseScheduleData_IgnoresStatisticsTable(t *testing.T) {
+	html := `<table>
+<tr><td>1.І</td><td>130,5 години</td></tr>
+<tr><td>3.І</td><td>129,5 години</td></tr>
+</table>`
+
+	result := parseScheduleData(html)
+
+	assert.False(t, hasScheduleData(result), "statistics table must not be parsed as a schedule")
+}
+
 func TestParseScheduleFromParagraphs_HandlesDivBlocks(t *testing.T) {
 	html := `
 <div data-block="true"><div>1.1 00:00 - 02:00, 06:00 - 08:00</div></div>

@@ -119,15 +119,24 @@ func TestFetchScheduleNews_SkipsFailedDetail(t *testing.T) {
 	assert.Equal(t, 4655, news[0].ID)
 }
 
-func TestFetchScheduleNews_SkipsKeywordTitleWithoutDate(t *testing.T) {
+func TestFetchScheduleNews_RequiresDateOrScheduleBody(t *testing.T) {
 	setTestNow(t, time.Date(2026, time.November, 10, 14, 0, 0, 0, kievLocation))
 
 	const listJSON = `{"success":true,"data":{"content":[
 {"id":4893,"title":"Графіки погодинних відключень: чому вони необхідні та як діяли у жовтні","slug":"statistics-article","publishedAt":"2026-11-10T13:40:00"},
-{"id":4800,"title":"Графік погодинних відключень (ГПВ)","slug":"old-no-date","publishedAt":"2026-11-01T10:00:00"}
+{"id":4801,"title":"Графік погодинних відключень (ГПВ)","slug":"paragraph-body","publishedAt":"2026-11-10T12:00:00"},
+{"id":4802,"title":"Графік погодинних відключень (ГПВ)","slug":"table-body","publishedAt":"2026-11-10T11:00:00"},
+{"id":4803,"title":"Графіки відключень скасовано","slug":"cancelled","publishedAt":"2026-11-10T10:00:00"},
+{"id":4800,"title":"Графік погодинних відключень (ГПВ)","slug":"old-no-date","publishedAt":"2026-11-01T10:00:00"},
+{"id":4799,"title":"Увага, шахраї!","slug":"old-unrelated","publishedAt":"2026-11-01T09:00:00"}
 ]}}`
 
-	const articleJSON = `{"success":true,"data":{"content":"<p>Години без світла у жовтні:</p><p>1.1 – 130,5 години;</p><p>3.1 – 129,5 години;</p>"}}`
+	details := map[string]string{
+		"statistics-article": `{"success":true,"data":{"content":"<p>Години без світла у жовтні:</p><p>1.1 – 130,5 години;</p><p>3.1 – 129,5 години;</p>"}}`,
+		"paragraph-body":     `{"success":true,"data":{"content":"<p>1.1 15:00 - 17:00</p>"}}`,
+		"table-body":         `{"success":true,"data":{"content":"<table><tr><td>1.І</td><td>07:00&nbsp;–&nbsp;09:00</td></tr></table>"}}`,
+		"cancelled":          `{"success":true,"data":{"content":"<p>Графіки погодинних відключень скасовано.</p>"}}`,
+	}
 
 	var requested []string
 	mux := http.NewServeMux()
@@ -135,8 +144,11 @@ func TestFetchScheduleNews_SkipsKeywordTitleWithoutDate(t *testing.T) {
 		_, _ = w.Write([]byte(listJSON))
 	})
 	mux.HandleFunc("/api/v1/posts/", func(w http.ResponseWriter, r *http.Request) {
-		requested = append(requested, r.URL.Path[len("/api/v1/posts/"):])
-		_, _ = w.Write([]byte(articleJSON))
+		slug := r.URL.Path[len("/api/v1/posts/"):]
+		requested = append(requested, slug)
+		body, ok := details[slug]
+		require.True(t, ok, "unexpected detail request for %s", slug)
+		_, _ = w.Write([]byte(body))
 	})
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
@@ -144,9 +156,27 @@ func TestFetchScheduleNews_SkipsKeywordTitleWithoutDate(t *testing.T) {
 	news, err := fetchScheduleNews(context.Background(), server.Client(), server.URL+"/api/v1/posts/category/news?lang=uk")
 
 	require.NoError(t, err)
-	assert.Empty(t, news, "keyword titles without a date must not become schedules")
-	assert.ElementsMatch(t, []string{"statistics-article"}, requested,
-		"only the recent post gets its body checked")
+	assert.ElementsMatch(t, []string{"statistics-article", "paragraph-body", "table-body", "cancelled"}, requested,
+		"old posts without a date must not get their body fetched")
+	require.Len(t, news, 3, "statistics article must be dropped, real schedules kept")
+
+	byID := make(map[int]scheduleNews, len(news))
+	for _, item := range news {
+		byID[item.ID] = item
+	}
+
+	paragraph, ok := buildScheduleFromNews(byID[4801])
+	require.True(t, ok, "dateless title with a real paragraph schedule must be kept")
+	assert.Equal(t, "15:00 - 17:00", paragraph.Col1_1)
+
+	table, ok := buildScheduleFromNews(byID[4802])
+	require.True(t, ok, "dateless title with a table schedule must be kept")
+	assert.Equal(t, "07:00 – 09:00", table.Col1_1)
+
+	cancelled, ok := buildScheduleFromNews(byID[4803])
+	require.True(t, ok, "cancellation post without a title date must be kept")
+	assert.Equal(t, "скасовано", cancelled.Col1_1)
+	assert.Equal(t, "скасовано", cancelled.Col6_2)
 }
 
 func TestFetchScheduleNews_ListErrorStatus(t *testing.T) {
@@ -238,7 +268,7 @@ func TestParsePublishedAt(t *testing.T) {
 	}
 }
 
-func TestContainsSchedulePatterns(t *testing.T) {
+func TestParseScheduleData_DetectsScheduleBodies(t *testing.T) {
 	tests := []struct {
 		name string
 		html string
@@ -248,13 +278,15 @@ func TestContainsSchedulePatterns(t *testing.T) {
 		{"colon format", "<p>2.2: 06:00 – 08:00</p>", true},
 		{"nbsp separator", "<p>2.2&nbsp;17:00 - 19:00</p>", true},
 		{"time split across spans", "<p><span>3.1 19</span><span>:00 - 21:00</span></p>", true},
+		{"cancelled", "<p>Графіки погодинних відключень скасовано.</p>", true},
+		{"statistics article", "<p>1.1 – 130,5 години;</p>", false},
 		{"no queues", "<p>6 жовтня з 15:00 до 24:00 будуть застосовані ГПВ</p>", false},
 		{"date is not a queue", "<p>Станом на 01.12 15:00</p>", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, containsSchedulePatterns(tt.html))
+			assert.Equal(t, tt.want, hasScheduleData(parseScheduleData(tt.html)))
 		})
 	}
 }
