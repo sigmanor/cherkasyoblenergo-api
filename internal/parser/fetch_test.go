@@ -127,15 +127,17 @@ func TestFetchScheduleNews_RequiresDateOrScheduleBody(t *testing.T) {
 {"id":4801,"title":"Графік погодинних відключень (ГПВ)","slug":"paragraph-body","publishedAt":"2026-11-10T12:00:00"},
 {"id":4802,"title":"Графік погодинних відключень (ГПВ)","slug":"table-body","publishedAt":"2026-11-10T11:00:00"},
 {"id":4803,"title":"Графіки відключень скасовано","slug":"cancelled","publishedAt":"2026-11-10T10:00:00"},
+{"id":4804,"title":"Через негоду ремонтні роботи скасовано","slug":"unrelated-cancelled","publishedAt":"2026-11-10T09:30:00"},
 {"id":4800,"title":"Графік погодинних відключень (ГПВ)","slug":"old-no-date","publishedAt":"2026-11-01T10:00:00"},
 {"id":4799,"title":"Увага, шахраї!","slug":"old-unrelated","publishedAt":"2026-11-01T09:00:00"}
 ]}}`
 
 	details := map[string]string{
-		"statistics-article": `{"success":true,"data":{"content":"<p>Години без світла у жовтні:</p><p>1.1 – 130,5 години;</p><p>3.1 – 129,5 години;</p>"}}`,
-		"paragraph-body":     `{"success":true,"data":{"content":"<p>1.1 15:00 - 17:00</p>"}}`,
-		"table-body":         `{"success":true,"data":{"content":"<table><tr><td>1.І</td><td>07:00&nbsp;–&nbsp;09:00</td></tr></table>"}}`,
-		"cancelled":          `{"success":true,"data":{"content":"<p>Графіки погодинних відключень скасовано.</p>"}}`,
+		"statistics-article":  `{"success":true,"data":{"content":"<p>Години без світла у жовтні:</p><p>1.1 – 130,5 години;</p><p>3.1 – 129,5 години;</p>"}}`,
+		"paragraph-body":      `{"success":true,"data":{"content":"<p>1.1 15:00 - 17:00</p>"}}`,
+		"table-body":          `{"success":true,"data":{"content":"<table><tr><td>1.І</td><td>07:00&nbsp;–&nbsp;09:00</td></tr></table>"}}`,
+		"cancelled":           `{"success":true,"data":{"content":"<p>Графіки погодинних відключень скасовано.</p>"}}`,
+		"unrelated-cancelled": `{"success":true,"data":{"content":"<p>Через негоду ремонтні роботи скасовано.</p>"}}`,
 	}
 
 	var requested []string
@@ -156,7 +158,8 @@ func TestFetchScheduleNews_RequiresDateOrScheduleBody(t *testing.T) {
 	news, err := fetchScheduleNews(context.Background(), server.Client(), server.URL+"/api/v1/posts/category/news?lang=uk")
 
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"statistics-article", "paragraph-body", "table-body", "cancelled"}, requested,
+	assert.ElementsMatch(t,
+		[]string{"statistics-article", "paragraph-body", "table-body", "cancelled", "unrelated-cancelled"}, requested,
 		"old posts without a date must not get their body fetched")
 	require.Len(t, news, 3, "statistics article must be dropped, real schedules kept")
 
@@ -278,7 +281,6 @@ func TestParseScheduleData_DetectsScheduleBodies(t *testing.T) {
 		{"colon format", "<p>2.2: 06:00 – 08:00</p>", true},
 		{"nbsp separator", "<p>2.2&nbsp;17:00 - 19:00</p>", true},
 		{"time split across spans", "<p><span>3.1 19</span><span>:00 - 21:00</span></p>", true},
-		{"cancelled", "<p>Графіки погодинних відключень скасовано.</p>", true},
 		{"statistics article", "<p>1.1 – 130,5 години;</p>", false},
 		{"no queues", "<p>6 жовтня з 15:00 до 24:00 будуть застосовані ГПВ</p>", false},
 		{"date is not a queue", "<p>Станом на 01.12 15:00</p>", false},

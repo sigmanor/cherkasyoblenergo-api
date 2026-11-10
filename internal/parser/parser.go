@@ -302,7 +302,12 @@ func FetchAndStoreNews(ctx context.Context, db *gorm.DB, newsURL string) {
 func buildScheduleFromNews(news scheduleNews) (models.Schedule, bool) {
 	sch := parseScheduleData(news.HtmlBody)
 	if !hasScheduleData(sch) {
-		return models.Schedule{}, false
+		// A cancellation notice carries no time ranges, so it is only
+		// recognised when the post itself is about schedules.
+		if !containsScheduleKeywords(news.Title) || !announcesCancellation(news.HtmlBody) {
+			return models.Schedule{}, false
+		}
+		sch = cancelledSchedule()
 	}
 
 	sch.NewsID = news.ID
@@ -477,7 +482,9 @@ func fetchScheduleNews(ctx context.Context, client *http.Client, listURL string)
 			continue
 		}
 
-		if !hasScheduleTitle && !hasScheduleData(parseScheduleData(detailResp.Data.Content)) {
+		if !hasScheduleTitle &&
+			!hasScheduleData(parseScheduleData(detailResp.Data.Content)) &&
+			!(containsScheduleKeywords(post.Title) && announcesCancellation(detailResp.Data.Content)) {
 			continue
 		}
 
@@ -519,6 +526,44 @@ func containsScheduleKeywords(title string) bool {
 		}
 	}
 	return false
+}
+
+var sentenceSplitRe = regexp.MustCompile(`[.!?;\n]+`)
+
+var cancellationScheduleWords = []string{"графік", "відключ", "вимкн", "погодин", "гпв"}
+
+// announcesCancellation reports whether the body contains a sentence that both
+// mentions a schedule and says it was cancelled. A bare "скасовано" anywhere in
+// the post is not enough: unrelated news ("ремонтні роботи скасовано") must not
+// become an all-queue "скасовано" schedule.
+func announcesCancellation(htmlBody string) bool {
+	text := htmlBody
+	if doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlBody)); err == nil {
+		text = doc.Text()
+	}
+
+	for _, sentence := range sentenceSplitRe.Split(normalizeSpaces(text), -1) {
+		sentence = strings.ToLower(sentence)
+		if !strings.Contains(sentence, "скасован") {
+			continue
+		}
+		for _, word := range cancellationScheduleWords {
+			if strings.Contains(sentence, word) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func cancelledSchedule() models.Schedule {
+	var data models.Schedule
+	for i := 1; i <= 6; i++ {
+		for j := 1; j <= 2; j++ {
+			setQueueValue(&data, i, j, "скасовано")
+		}
+	}
+	return data
 }
 
 func normalizeSpaces(text string) string {
@@ -671,15 +716,6 @@ func parseScheduleData(htmlBody string) models.Schedule {
 		if foundTableData {
 			return data
 		}
-	}
-
-	if strings.Contains(strings.ToLower(htmlBody), "скасовано") {
-		for i := 1; i <= 6; i++ {
-			for j := 1; j <= 2; j++ {
-				setQueueValue(&data, i, j, "скасовано")
-			}
-		}
-		return data
 	}
 
 	return data

@@ -175,6 +175,48 @@ func TestContainsScheduleKeywords(t *testing.T) {
 	}
 }
 
+func TestAnnouncesCancellation(t *testing.T) {
+	tests := []struct {
+		name string
+		html string
+		want bool
+	}{
+		{"notice", "<p>Графіки погодинних відключень скасовано.</p>", true},
+		{"plural form", "<p>Графіки погодинних відключень на 10 листопада скасовані.</p>", true},
+		{"unrelated cancellation", "<p>Через негоду ремонтні роботи скасовано.</p>", false},
+		{"schedule without cancellation", "<p>Графіки погодинних відключень на 10 листопада.</p>", false},
+		{"no schedule context", "<p>Скасовано.</p>", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, announcesCancellation(tt.html))
+		})
+	}
+}
+
+func TestBuildScheduleFromNews_CancellationRequiresScheduleTitle(t *testing.T) {
+	cancelledBody := "<p>Графіки погодинних відключень скасовано.</p>"
+
+	fromScheduleTitle, ok := buildScheduleFromNews(scheduleNews{
+		ID:       4900,
+		Date:     time.Date(2026, time.November, 10, 12, 0, 0, 0, kievLocation),
+		Title:    "Графіки відключень скасовано",
+		HtmlBody: cancelledBody,
+	})
+	require.True(t, ok, "a cancellation post about schedules must be stored")
+	assert.Equal(t, "скасовано", fromScheduleTitle.Col1_1)
+	assert.Equal(t, "скасовано", fromScheduleTitle.Col6_2)
+
+	_, ok = buildScheduleFromNews(scheduleNews{
+		ID:       4901,
+		Date:     time.Date(2026, time.November, 10, 12, 0, 0, 0, kievLocation),
+		Title:    "Через негоду ремонтні роботи скасовано",
+		HtmlBody: "<p>Через негоду ремонтні роботи скасовано.</p>",
+	})
+	assert.False(t, ok, "unrelated news must not become a cancelled schedule")
+}
+
 func TestSyncScheduleRecord_CreatesNewRecord(t *testing.T) {
 	db := setupParserTestDB(t)
 	parsedDate := time.Date(2026, time.April, 8, 19, 45, 0, 0, kievLocation)
