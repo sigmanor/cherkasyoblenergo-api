@@ -1,3 +1,12 @@
+## [2.8.2](https://github.com/Sigmanor/cherkasyoblenergo-api/compare/v2.8.1...v2.8.2) (2026-11-10)
+
+
+### Bug Fixes
+
+* **parser:** normalize table values and gate on parsed schedule data ([5969a15](https://github.com/Sigmanor/cherkasyoblenergo-api/commit/5969a15059e131940ae03f47c1ad4bd9271951ee))
+* **parser:** only treat schedule posts as cancellations ([874c0d5](https://github.com/Sigmanor/cherkasyoblenergo-api/commit/874c0d54cb0406ed7ef223ddd5d826202a883e1c))
+* **parser:** stop accepting news articles as blackout schedules ([0ac952c](https://github.com/Sigmanor/cherkasyoblenergo-api/commit/0ac952cb0187d1dec80637ab72971ec0b55b5096))
+
 ## [2.8.1](https://github.com/Sigmanor/cherkasyoblenergo-api/compare/v2.8.0...v2.8.1) (2026-10-06)
 
 
