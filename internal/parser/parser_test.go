@@ -44,6 +44,52 @@ func TestNormalizeTimeRanges_TrimsTrailingSeparators(t *testing.T) {
 	assert.Equal(t, "02:00 - 04:00", normalizeTimeRanges(" 02:00 - 04:00, "))
 }
 
+func TestIsValidQueueScheduleValue(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"single range", "07:00 - 09:00", true},
+		{"multiple ranges", "07:00 - 09:00, 21:00 - 22:00", true},
+		{"en dash", "00:30 – 04:00", true},
+		{"cancelled", "скасовано", true},
+		{"article statistics", "– 130,5 години", false},
+		{"article statistics with comma", "– 129,0 години", false},
+		{"empty", "", false},
+		{"plain text", "Немає графіка", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isValidQueueScheduleValue(tt.value))
+		})
+	}
+}
+
+func TestParseScheduleFromParagraphs_IgnoresStatisticsArticle(t *testing.T) {
+	html := `
+<p>Години без світла у жовтні:</p>
+<p>1.1 – 130,5 години;</p>
+<p>1.2 – 128,5 години;</p>
+<p>2.1 – 128,5 години;</p>
+<p>2.2 – 127,5 години;</p>
+<p>3.1 – 129,5 години;</p>
+<p>3.2 – 129,0 години;</p>
+<p>4.1 – 129,5 години;</p>
+<p>4.2 – 129,0 години;</p>
+<p>5.1 – 128,5 години;</p>
+<p>5.2 – 129,5 години;</p>
+<p>6.1 – 128,0 години;</p>
+<p>6.2 – 128,5 години.</p>
+`
+
+	result, found := parseScheduleFromParagraphs(html)
+
+	assert.False(t, found, "statistics article must not be parsed as a schedule")
+	assert.False(t, hasScheduleData(result))
+}
+
 func TestParseScheduleFromParagraphs_HandlesDivBlocks(t *testing.T) {
 	html := `
 <div data-block="true"><div>1.1 00:00 - 02:00, 06:00 - 08:00</div></div>

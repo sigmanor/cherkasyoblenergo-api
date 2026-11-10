@@ -119,6 +119,36 @@ func TestFetchScheduleNews_SkipsFailedDetail(t *testing.T) {
 	assert.Equal(t, 4655, news[0].ID)
 }
 
+func TestFetchScheduleNews_SkipsKeywordTitleWithoutDate(t *testing.T) {
+	setTestNow(t, time.Date(2026, time.November, 10, 14, 0, 0, 0, kievLocation))
+
+	const listJSON = `{"success":true,"data":{"content":[
+{"id":4893,"title":"Графіки погодинних відключень: чому вони необхідні та як діяли у жовтні","slug":"statistics-article","publishedAt":"2026-11-10T13:40:00"},
+{"id":4800,"title":"Графік погодинних відключень (ГПВ)","slug":"old-no-date","publishedAt":"2026-11-01T10:00:00"}
+]}}`
+
+	const articleJSON = `{"success":true,"data":{"content":"<p>Години без світла у жовтні:</p><p>1.1 – 130,5 години;</p><p>3.1 – 129,5 години;</p>"}}`
+
+	var requested []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/posts/category/news", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(listJSON))
+	})
+	mux.HandleFunc("/api/v1/posts/", func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.URL.Path[len("/api/v1/posts/"):])
+		_, _ = w.Write([]byte(articleJSON))
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	news, err := fetchScheduleNews(context.Background(), server.Client(), server.URL+"/api/v1/posts/category/news?lang=uk")
+
+	require.NoError(t, err)
+	assert.Empty(t, news, "keyword titles without a date must not become schedules")
+	assert.ElementsMatch(t, []string{"statistics-article"}, requested,
+		"only the recent post gets its body checked")
+}
+
 func TestFetchScheduleNews_ListErrorStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

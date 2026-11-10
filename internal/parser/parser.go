@@ -458,8 +458,9 @@ func fetchScheduleNews(ctx context.Context, client *http.Client, listURL string)
 			continue
 		}
 
-		hasScheduleKeywords := containsScheduleKeywords(post.Title)
-		if !hasScheduleKeywords && nowFunc().Sub(parsedDate) > bodyCheckWindow {
+		hasScheduleTitle := containsScheduleKeywords(post.Title) &&
+			utils.ExtractScheduleDateFromTitle(post.Title) != ""
+		if !hasScheduleTitle && nowFunc().Sub(parsedDate) > bodyCheckWindow {
 			continue
 		}
 
@@ -478,7 +479,7 @@ func fetchScheduleNews(ctx context.Context, client *http.Client, listURL string)
 			continue
 		}
 
-		if !hasScheduleKeywords && !containsSchedulePatterns(detailResp.Data.Content) {
+		if !hasScheduleTitle && !containsSchedulePatterns(detailResp.Data.Content) {
 			continue
 		}
 
@@ -546,6 +547,28 @@ func normalizeTimeRanges(value string) string {
 	return strings.TrimSpace(value)
 }
 
+var timeRangeRe = regexp.MustCompile(`^\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}$`)
+
+// isValidQueueScheduleValue reports whether value is a real queue schedule
+// ("07:00 - 09:00, 21:00 - 22:00" or "скасовано"). Without this check any
+// paragraph that starts with "1.1" is treated as a schedule, so news articles
+// with statistics like "1.1 – 130,5 години" end up in the schedules table.
+func isValidQueueScheduleValue(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if strings.EqualFold(value, "скасовано") {
+		return true
+	}
+	for _, part := range strings.Split(value, ",") {
+		if !timeRangeRe.MatchString(strings.TrimSpace(part)) {
+			return false
+		}
+	}
+	return true
+}
+
 func parseScheduleFromParagraphs(htmlBody string) (models.Schedule, bool) {
 	var data models.Schedule
 	found := false
@@ -585,6 +608,11 @@ func parseScheduleFromParagraphs(htmlBody string) (models.Schedule, bool) {
 
 		if err1 != nil || err2 != nil || mainQueue < 1 || mainQueue > 6 || subQueue < 1 || subQueue > 2 {
 			log.Printf("Invalid queue values: mainQueue=%d, subQueue=%d", mainQueue, subQueue)
+			return
+		}
+
+		if !isValidQueueScheduleValue(timeRanges) {
+			log.Printf("Skipping queue %d.%d: %q is not a time range", mainQueue, subQueue, timeRanges)
 			return
 		}
 
@@ -641,6 +669,9 @@ func parseScheduleData(htmlBody string) models.Schedule {
 			case "ІІ", "ll", "II":
 				subQueue = 2
 			default:
+				return
+			}
+			if !isValidQueueScheduleValue(timeStr) {
 				return
 			}
 			setQueueValue(&data, mainQueue, subQueue, timeStr)
