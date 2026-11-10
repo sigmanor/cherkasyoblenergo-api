@@ -166,8 +166,6 @@ const postPublishedAtLayout = "2006-01-02T15:04:05"
 // get their body fetched and checked for schedule patterns.
 const bodyCheckWindow = 48 * time.Hour
 
-var schedulePatternRe = regexp.MustCompile(`\b[1-6]\.[1-2]\.?:?\s*\d{1,2}:\d{2}`)
-
 var nowFunc = time.Now
 
 type postSummary struct {
@@ -304,7 +302,12 @@ func FetchAndStoreNews(ctx context.Context, db *gorm.DB, newsURL string) {
 func buildScheduleFromNews(news scheduleNews) (models.Schedule, bool) {
 	sch := parseScheduleData(news.HtmlBody)
 	if !hasScheduleData(sch) {
-		return models.Schedule{}, false
+		// A cancellation notice carries no time ranges, so it is only
+		// recognised when the post itself is about schedules.
+		if !containsScheduleKeywords(news.Title) || !announcesCancellation(news.HtmlBody) {
+			return models.Schedule{}, false
+		}
+		sch = cancelledSchedule()
 	}
 
 	sch.NewsID = news.ID
@@ -458,8 +461,9 @@ func fetchScheduleNews(ctx context.Context, client *http.Client, listURL string)
 			continue
 		}
 
-		hasScheduleKeywords := containsScheduleKeywords(post.Title)
-		if !hasScheduleKeywords && nowFunc().Sub(parsedDate) > bodyCheckWindow {
+		hasScheduleTitle := containsScheduleKeywords(post.Title) &&
+			utils.ExtractScheduleDateFromTitle(post.Title) != ""
+		if !hasScheduleTitle && nowFunc().Sub(parsedDate) > bodyCheckWindow {
 			continue
 		}
 
@@ -478,7 +482,9 @@ func fetchScheduleNews(ctx context.Context, client *http.Client, listURL string)
 			continue
 		}
 
-		if !hasScheduleKeywords && !containsSchedulePatterns(detailResp.Data.Content) {
+		if !hasScheduleTitle &&
+			!hasScheduleData(parseScheduleData(detailResp.Data.Content)) &&
+			!(containsScheduleKeywords(post.Title) && announcesCancellation(detailResp.Data.Content)) {
 			continue
 		}
 
@@ -506,14 +512,6 @@ func parsePublishedAt(value string) (time.Time, error) {
 	return t.In(kievLocation), nil
 }
 
-func containsSchedulePatterns(htmlBody string) bool {
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlBody))
-	if err != nil {
-		return schedulePatternRe.MatchString(htmlBody)
-	}
-	return schedulePatternRe.MatchString(normalizeSpaces(doc.Text()))
-}
-
 func containsScheduleKeywords(title string) bool {
 	titleLower := strings.ToLower(title)
 	if strings.Contains(titleLower, "гпв") {
@@ -530,6 +528,44 @@ func containsScheduleKeywords(title string) bool {
 	return false
 }
 
+var sentenceSplitRe = regexp.MustCompile(`[.!?;\n]+`)
+
+var cancellationScheduleWords = []string{"графік", "відключ", "вимкн", "погодин", "гпв"}
+
+// announcesCancellation reports whether the body contains a sentence that both
+// mentions a schedule and says it was cancelled. A bare "скасовано" anywhere in
+// the post is not enough: unrelated news ("ремонтні роботи скасовано") must not
+// become an all-queue "скасовано" schedule.
+func announcesCancellation(htmlBody string) bool {
+	text := htmlBody
+	if doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlBody)); err == nil {
+		text = doc.Text()
+	}
+
+	for _, sentence := range sentenceSplitRe.Split(normalizeSpaces(text), -1) {
+		sentence = strings.ToLower(sentence)
+		if !strings.Contains(sentence, "скасован") {
+			continue
+		}
+		for _, word := range cancellationScheduleWords {
+			if strings.Contains(sentence, word) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func cancelledSchedule() models.Schedule {
+	var data models.Schedule
+	for i := 1; i <= 6; i++ {
+		for j := 1; j <= 2; j++ {
+			setQueueValue(&data, i, j, "скасовано")
+		}
+	}
+	return data
+}
+
 func normalizeSpaces(text string) string {
 	text = strings.ReplaceAll(text, "\u00a0", " ")
 	text = strings.ReplaceAll(text, "\u202f", " ")
@@ -544,6 +580,28 @@ func normalizeTimeRanges(value string) string {
 	value = normalizeSpaces(value)
 	value = strings.TrimRight(value, ",.;")
 	return strings.TrimSpace(value)
+}
+
+var timeRangeRe = regexp.MustCompile(`^\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}$`)
+
+// isValidQueueScheduleValue reports whether value is a real queue schedule
+// ("07:00 - 09:00, 21:00 - 22:00" or "скасовано"). Without this check any
+// paragraph that starts with "1.1" is treated as a schedule, so news articles
+// with statistics like "1.1 – 130,5 години" end up in the schedules table.
+func isValidQueueScheduleValue(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if strings.EqualFold(value, "скасовано") {
+		return true
+	}
+	for _, part := range strings.Split(value, ",") {
+		if !timeRangeRe.MatchString(strings.TrimSpace(part)) {
+			return false
+		}
+	}
+	return true
 }
 
 func parseScheduleFromParagraphs(htmlBody string) (models.Schedule, bool) {
@@ -588,6 +646,11 @@ func parseScheduleFromParagraphs(htmlBody string) (models.Schedule, bool) {
 			return
 		}
 
+		if !isValidQueueScheduleValue(timeRanges) {
+			log.Printf("Skipping queue %d.%d: %q is not a time range", mainQueue, subQueue, timeRanges)
+			return
+		}
+
 		log.Printf("Found schedule: %d.%d = %s", mainQueue, subQueue, timeRanges)
 		setQueueValue(&data, mainQueue, subQueue, timeRanges)
 		found = true
@@ -625,7 +688,7 @@ func parseScheduleData(htmlBody string) models.Schedule {
 				return
 			}
 			queueStr := strings.TrimSpace(tr.Find("td").First().Text())
-			timeStr := strings.TrimSpace(tr.Find("td").Last().Text())
+			timeStr := normalizeTimeRanges(tr.Find("td").Last().Text())
 			parts := strings.Split(queueStr, ".")
 			if len(parts) != 2 {
 				return
@@ -643,6 +706,9 @@ func parseScheduleData(htmlBody string) models.Schedule {
 			default:
 				return
 			}
+			if !isValidQueueScheduleValue(timeStr) {
+				return
+			}
 			setQueueValue(&data, mainQueue, subQueue, timeStr)
 			foundTableData = true
 		})
@@ -650,15 +716,6 @@ func parseScheduleData(htmlBody string) models.Schedule {
 		if foundTableData {
 			return data
 		}
-	}
-
-	if strings.Contains(strings.ToLower(htmlBody), "скасовано") {
-		for i := 1; i <= 6; i++ {
-			for j := 1; j <= 2; j++ {
-				setQueueValue(&data, i, j, "скасовано")
-			}
-		}
-		return data
 	}
 
 	return data

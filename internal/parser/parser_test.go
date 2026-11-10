@@ -44,6 +44,77 @@ func TestNormalizeTimeRanges_TrimsTrailingSeparators(t *testing.T) {
 	assert.Equal(t, "02:00 - 04:00", normalizeTimeRanges(" 02:00 - 04:00, "))
 }
 
+func TestIsValidQueueScheduleValue(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"single range", "07:00 - 09:00", true},
+		{"multiple ranges", "07:00 - 09:00, 21:00 - 22:00", true},
+		{"en dash", "00:30 – 04:00", true},
+		{"cancelled", "скасовано", true},
+		{"article statistics", "– 130,5 години", false},
+		{"article statistics with comma", "– 129,0 години", false},
+		{"empty", "", false},
+		{"plain text", "Немає графіка", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isValidQueueScheduleValue(tt.value))
+		})
+	}
+}
+
+func TestParseScheduleFromParagraphs_IgnoresStatisticsArticle(t *testing.T) {
+	html := `
+<p>Години без світла у жовтні:</p>
+<p>1.1 – 130,5 години;</p>
+<p>1.2 – 128,5 години;</p>
+<p>2.1 – 128,5 години;</p>
+<p>2.2 – 127,5 години;</p>
+<p>3.1 – 129,5 години;</p>
+<p>3.2 – 129,0 години;</p>
+<p>4.1 – 129,5 години;</p>
+<p>4.2 – 129,0 години;</p>
+<p>5.1 – 128,5 години;</p>
+<p>5.2 – 129,5 години;</p>
+<p>6.1 – 128,0 години;</p>
+<p>6.2 – 128,5 години.</p>
+`
+
+	result, found := parseScheduleFromParagraphs(html)
+
+	assert.False(t, found, "statistics article must not be parsed as a schedule")
+	assert.False(t, hasScheduleData(result))
+}
+
+func TestParseScheduleData_HandlesTableWithNbsp(t *testing.T) {
+	html := `<table>
+<tr><th>Черга</th><th>Час</th></tr>
+<tr><td>1.І</td><td>07:00&nbsp;–&nbsp;09:00</td></tr>
+<tr><td>2.ІІ</td><td>22:00 - 24:00</td></tr>
+</table>`
+
+	result := parseScheduleData(html)
+
+	assert.Equal(t, "07:00 – 09:00", result.Col1_1)
+	assert.Equal(t, "22:00 - 24:00", result.Col2_2)
+	assert.True(t, hasScheduleData(result))
+}
+
+func TestParseScheduleData_IgnoresStatisticsTable(t *testing.T) {
+	html := `<table>
+<tr><td>1.І</td><td>130,5 години</td></tr>
+<tr><td>3.І</td><td>129,5 години</td></tr>
+</table>`
+
+	result := parseScheduleData(html)
+
+	assert.False(t, hasScheduleData(result), "statistics table must not be parsed as a schedule")
+}
+
 func TestParseScheduleFromParagraphs_HandlesDivBlocks(t *testing.T) {
 	html := `
 <div data-block="true"><div>1.1 00:00 - 02:00, 06:00 - 08:00</div></div>
@@ -102,6 +173,48 @@ func TestContainsScheduleKeywords(t *testing.T) {
 			assert.Equal(t, tt.want, containsScheduleKeywords(tt.title))
 		})
 	}
+}
+
+func TestAnnouncesCancellation(t *testing.T) {
+	tests := []struct {
+		name string
+		html string
+		want bool
+	}{
+		{"notice", "<p>Графіки погодинних відключень скасовано.</p>", true},
+		{"plural form", "<p>Графіки погодинних відключень на 10 листопада скасовані.</p>", true},
+		{"unrelated cancellation", "<p>Через негоду ремонтні роботи скасовано.</p>", false},
+		{"schedule without cancellation", "<p>Графіки погодинних відключень на 10 листопада.</p>", false},
+		{"no schedule context", "<p>Скасовано.</p>", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, announcesCancellation(tt.html))
+		})
+	}
+}
+
+func TestBuildScheduleFromNews_CancellationRequiresScheduleTitle(t *testing.T) {
+	cancelledBody := "<p>Графіки погодинних відключень скасовано.</p>"
+
+	fromScheduleTitle, ok := buildScheduleFromNews(scheduleNews{
+		ID:       4900,
+		Date:     time.Date(2026, time.November, 10, 12, 0, 0, 0, kievLocation),
+		Title:    "Графіки відключень скасовано",
+		HtmlBody: cancelledBody,
+	})
+	require.True(t, ok, "a cancellation post about schedules must be stored")
+	assert.Equal(t, "скасовано", fromScheduleTitle.Col1_1)
+	assert.Equal(t, "скасовано", fromScheduleTitle.Col6_2)
+
+	_, ok = buildScheduleFromNews(scheduleNews{
+		ID:       4901,
+		Date:     time.Date(2026, time.November, 10, 12, 0, 0, 0, kievLocation),
+		Title:    "Через негоду ремонтні роботи скасовано",
+		HtmlBody: "<p>Через негоду ремонтні роботи скасовано.</p>",
+	})
+	assert.False(t, ok, "unrelated news must not become a cancelled schedule")
 }
 
 func TestSyncScheduleRecord_CreatesNewRecord(t *testing.T) {
